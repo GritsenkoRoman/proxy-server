@@ -1,0 +1,6 @@
+env: local # local, dev, prod
+http_server:
+  host: localhost
+  port: 8088
+  timeout: 10s
+  idle_timeout: 60s
