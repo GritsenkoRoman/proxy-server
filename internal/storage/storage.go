@@ -11,6 +11,14 @@ var (
 )
 
 //go:generate go run github.com/vektra/mockery/v2@v2.28.2 --name=Storage
+
+/*
+1. Интерфейсы лучше объявить в там где используются
+2. Предлагаю некоторые изменения в интерфейсах. В метод create передавать параметры
+на основе которых будет осдаваться response. Или переименовать метод в CreateEmptyResponse или как то так.
+Но если передавать параметры то более универсально кажется.Также объединить методы по заданию статусов в один, например
+SetStatus(status string, err error) err обрабатывать только если статус error
+*/
 type Storage interface {
 	Create() (string, error)
 	SetInProgress(id string)
