@@ -22,6 +22,7 @@ func handler(w http.ResponseWriter, r *http.Request) {
 }
 
 func main() {
+	// лучше из этого метода возвращать ошибку и падать уже тут, на самом верху
 	cfg := config.NewConfig()
 	fmt.Printf("Configuration: %+v\n", cfg)
 	//TODO: Add logger: slog/standart logger
