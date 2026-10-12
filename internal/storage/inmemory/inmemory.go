@@ -1,6 +1,7 @@
 package inmemory
 
 import (
+	"net/http"
 	"sync"
 
 	"proxy-server/internal/storage"
@@ -20,25 +21,26 @@ func New() *Memory {
 	}
 }
 
-func (s *Memory) Create() (string, error) {
+func (s *Memory) CreateEmptyResponse() (task.Response, error) {
 	id := uuid.NewString()
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if _, exists := s.tasks[id]; exists {
-		return "", storage.ErrTaskExists
+		return task.Response{}, storage.ErrTaskExists
 	}
 
-	s.tasks[id] = task.Response{
+	var result = task.Response{
 		ID:     id,
 		Status: task.StatusNew,
 	}
+	s.tasks[id] = result
 
-	return id, nil
+	return result, nil
 }
 
-func (s *Memory) SetInProgress(id string) {
+func (s *Memory) SetStatus(id string, status task.Status, resp *http.Response, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -46,45 +48,26 @@ func (s *Memory) SetInProgress(id string) {
 	if !exists {
 		return
 	}
+	response.Status = status
 
-	response.Status = task.StatusInProgress
-
-	s.tasks[id] = response
-}
-
-func (s *Memory) SetDone(
-	id string,
-	statusCode int,
-	headers map[string][]string,
-	length int64,
-) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	response, exists := s.tasks[id]
-	if !exists {
-		return
+	switch status {
+	case task.StatusDone:
+		{
+			if resp == nil {
+				return
+			}
+			response.HTTPStatusCode = resp.StatusCode
+			response.Headers = resp.Header.Clone()
+			response.Length = resp.ContentLength
+		}
+	case task.StatusError:
+		{
+			if err == nil {
+				return
+			}
+			response.Error = err.Error()
+		}
 	}
-
-	response.Status = task.StatusDone
-	response.HTTPStatusCode = statusCode
-	response.Headers = cloneHeaders(headers)
-	response.Length = length
-
-	s.tasks[id] = response
-}
-
-func (s *Memory) SetError(id string, err error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	response, exists := s.tasks[id]
-	if !exists {
-		return
-	}
-
-	response.Status = task.StatusError
-	response.Error = err.Error()
 
 	s.tasks[id] = response
 }
