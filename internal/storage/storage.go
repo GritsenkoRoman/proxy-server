@@ -2,6 +2,7 @@ package storage
 
 import (
 	"errors"
+	"net/http"
 	"proxy-server/internal/task"
 )
 
@@ -12,15 +13,7 @@ var (
 
 //go:generate go run github.com/vektra/mockery/v2@v2.28.2 --name=Storage
 type Storage interface {
-	Create() (string, error)
-	SetInProgress(id string)
-	SetDone(
-		id string,
-		statusCode int,
-		headers map[string][]string,
-		length int64,
-	)
-	SetError(id string, err error)
-
+	CreateEmptyResponse() (task.Response, error)
+	SetStatus(id string, status task.Status, resp *http.Response, err error)
 	Get(id string) (task.Response, error)
 }
