@@ -1,4 +1,7 @@
 env: local # local, dev, prod
+storage_path:"postgres://user:password@localhost:5432/proxy?sslmode=disable"
+worker_count: 10
+queue_size: 100
 http_server:
   host: localhost
   port: 8088

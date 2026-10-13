@@ -5,23 +5,17 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
-	"io"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
-	"time"
+
+	"proxy-server/internal/handlers"
+	serviceMock "proxy-server/internal/handlers/mocks"
+	"proxy-server/internal/task"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
-
-	"proxy-server/internal/handlers"
-	clientMock "proxy-server/internal/handlers/client/mocks"
-	storageMock "proxy-server/internal/storage/mocks"
-	"proxy-server/internal/task"
 )
 
 func TestGetHandler(t *testing.T) {
@@ -58,7 +52,7 @@ func TestGetHandler(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			sMock := storageMock.NewStorage(t)
+			sMock := serviceMock.NewService(t)
 
 			if tc.respError == "" || tc.mockError != nil {
 				sMock.
@@ -103,13 +97,15 @@ func TestGetHandler(t *testing.T) {
 }
 
 func TestPerformHandler(t *testing.T) {
-	cases := []struct {
-		name        string
-		body        string
-		respError   string
-		mockID      string
-		mockError   error
-		clientError error
+	validationError := "Key: 'CreateRequest.Method' Error:Field validation for 'Method' failed on the 'required' tag\n" +
+		"Key: 'CreateRequest.URL' Error:Field validation for 'URL' failed on the 'required' tag"
+
+	tests := []struct {
+		name      string
+		body      string
+		mockID    string
+		mockError error
+		respError string
 	}{
 		{
 			name:   "Success",
@@ -129,140 +125,68 @@ func TestPerformHandler(t *testing.T) {
 		{
 			name:      "Validation error",
 			body:      `{}`,
-			respError: "Key: 'CreateRequest.Method' Error:Field validation for 'Method' failed on the 'required' tag\nKey: 'CreateRequest.URL' Error:Field validation for 'URL' failed on the 'required' tag",
+			respError: validationError,
 		},
 		{
 			name:      "Create error",
 			body:      `{"method":"GET","url":"https://google.com"}`,
-			respError: "storage error",
 			mockError: errors.New("storage error"),
-		},
-		{
-			name:        "Client error",
-			body:        `{"method":"GET","url":"https://google.com"}`,
-			mockID:      "test-id",
-			clientError: errors.New("request failed"),
+			respError: "storage error",
 		},
 	}
 
-	for _, tc := range cases {
+	for _, tc := range tests {
 		tc := tc
-		fmt.Printf("%s", tc.name)
+
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			sMock := storageMock.NewStorage(t)
-			clMock := clientMock.NewHTTPClient(t)
+			sMock := serviceMock.NewService(t)
 
-			// Create вызывается только после успешной
-			// десериализации и валидации.
-			if tc.mockID != "" || tc.mockError != nil {
+			if tc.name == "Success" || tc.name == "Create error" {
 				sMock.
-					On("Create").
-					Return(tc.mockID, tc.mockError).
+					On("Create", task.CreateRequest{
+						Method: "GET",
+						URL:    "https://google.com",
+					}).
+					Return(task.Response{
+						ID: tc.mockID,
+					}, tc.mockError).
 					Once()
 			}
 
-			if tc.mockID != "" {
-				// Канал нужен, чтобы дождаться выполнения goroutine.
-				done := make(chan struct{})
-
-				sMock.
-					On("SetInProgress", tc.mockID).
-					Once()
-
-				if tc.clientError == nil {
-					clMock.
-						On("Do", mock.Anything).
-						Return(
-							&http.Response{
-								StatusCode:    http.StatusOK,
-								Header:        http.Header{},
-								ContentLength: 0,
-								Body:          io.NopCloser(strings.NewReader("")),
-							},
-							nil,
-						).
-						Once()
-
-					sMock.
-						On(
-							"SetDone",
-							tc.mockID,
-							http.StatusOK,
-							mock.Anything,
-							int64(0),
-						).
-						Run(func(args mock.Arguments) {
-							close(done)
-						}).
-						Once()
-				} else {
-					clMock.
-						On("Do", mock.Anything).
-						Return(nil, tc.clientError).
-						Once()
-
-					sMock.
-						On(
-							"SetError",
-							tc.mockID,
-							tc.clientError,
-						).
-						Run(func(args mock.Arguments) {
-							close(done)
-						}).
-						Once()
-				}
-
-				defer func() {
-					select {
-					case <-done:
-					case <-time.After(time.Second):
-						t.Fatal("timeout waiting for goroutine")
-					}
-				}()
-			}
-
-			handler := handlers.Perform(sMock, clMock)
+			handler := handlers.Perform(sMock)
 
 			req := httptest.NewRequest(
 				http.MethodPost,
 				"/task",
 				bytes.NewBufferString(tc.body),
 			)
-
 			req.Header.Set("Content-Type", "application/json")
 
 			rr := httptest.NewRecorder()
-
 			handler.ServeHTTP(rr, req)
 
-			assert.Equal(t, http.StatusOK, rr.Code)
+			require.Equal(t, http.StatusOK, rr.Code)
 
-			// Success / Client error:
-			// handler возвращает {"id": "..."}.
-			if tc.mockID != "" {
-				var result map[string]string
+			if tc.respError != "" {
+				var resp task.Response
 
 				require.NoError(
 					t,
-					json.Unmarshal(rr.Body.Bytes(), &result),
+					json.Unmarshal(rr.Body.Bytes(), &resp),
 				)
-
-				assert.Equal(t, tc.mockID, result["id"])
+				assert.Equal(t, tc.respError, resp.Error)
 				return
 			}
 
-			// Ошибки decode / validation / Create.
-			var resp task.Response
+			var result map[string]string
 
 			require.NoError(
 				t,
-				json.Unmarshal(rr.Body.Bytes(), &resp),
+				json.Unmarshal(rr.Body.Bytes(), &result),
 			)
-
-			assert.Equal(t, tc.respError, resp.Error)
+			assert.Equal(t, tc.mockID, result["id"])
 		})
 	}
 }

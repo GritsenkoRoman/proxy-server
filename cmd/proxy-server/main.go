@@ -6,7 +6,9 @@ import (
 	"os"
 	"os/signal"
 	"proxy-server/internal/handlers"
-	"proxy-server/internal/storage/inmemory"
+	service "proxy-server/internal/service"
+	postgres "proxy-server/internal/storage/postgresql"
+	wp "proxy-server/internal/worker-pool"
 	"syscall"
 	"time"
 
@@ -16,26 +18,41 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 )
 
-func handler(w http.ResponseWriter, r *http.Request) {
-	fmt.Fprintf(w, "Hi there, I love %s!", r.URL.Path[1:])
-
-}
-
 func main() {
-	cfg := config.NewConfig()
+	cfg, err := config.NewConfig()
+	if err != nil {
+		fmt.Errorf(err.Error())
+		panic(err)
+	}
 	fmt.Printf("Configuration: %+v\n", cfg)
 	//TODO: Add logger: slog/standart logger
 
-	storage := inmemory.New()
-	//TODO: Add constants package
-	//TODO: Add message queue
-	//TODO: add more middleware
+	storage, err := postgres.New(cfg.StoragePath)
+	if err != nil {
+		fmt.Errorf(err.Error())
+		panic(err)
+	}
+	workerPool := wp.New(
+		storage,
+		&http.Client{},
+		cfg.WorkerCount,
+		cfg.QueueSize,
+		cfg.HttpServer.Timeout,
+	)
+
+	taskService := service.New(
+		storage,
+		workerPool,
+	)
+
 	router := chi.NewRouter()
 	router.Use(middleware.Logger)
 	router.Use(middleware.Recoverer)
 
-	router.Post("/task", handlers.Perform(storage, &http.Client{}))
-	router.Get("/task/{id}", handlers.Get(storage))
+	router.Post("/task", handlers.Perform(taskService))
+	router.Get("/task/{id}", handlers.Get(taskService))
+
+	workerPool.Start()
 
 	srv := &http.Server{
 		Addr:         fmt.Sprintf("%s:%d", cfg.HttpServer.Host, cfg.HttpServer.Port),
@@ -60,4 +77,5 @@ func main() {
 	<-done
 	fmt.Println("stopping server")
 
+	workerPool.Shutdown()
 }
